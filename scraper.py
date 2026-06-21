@@ -7,7 +7,7 @@ import os
 
 # ================= CONFIG =================
 
-BASE_URL = "https://www.zonaprop.com.ar/inmuebles-alquiler-villa-del-parque-villa-santa-rita-villa-general-mitre-flores-floresta-la-paternal-caballito-floresta-norte-floresta-floresta-sur-floresta-4-ambientes.html"
+BASE_URL = "https://www.zonaprop.com.ar/inmuebles-alquiler-villa-del-parque-villa-santa-rita-villa-general-mitre-villa-devoto-villa-luro-flores-floresta-la-paternal-caballito-floresta-norte-floresta-floresta-sur-floresta-4-ambientes.html"
 
 PAGES = list(range(1, 6))
 MAX_PRECIO_ARS = 2_000_000
@@ -25,6 +25,8 @@ CARD = "div.postingCard-module__posting-container"
 BARRIOS_VALIDOS = sorted([
     "Villa General Mitre",
     "Villa Santa Rita",
+    "Villa Devoto",
+    "Villa Luro",
     "Villa del Parque",
     "Villa Devoto",
     "Floresta Norte",
