@@ -7,7 +7,7 @@ import os
 
 # ================= CONFIG =================
 
-BASE_URL = "https://www.zonaprop.com.ar/inmuebles-alquiler-villa-del-parque-villa-santa-rita-villa-general-mitre-villa-devoto-villa-luro-flores-floresta-la-paternal-caballito-floresta-norte-floresta-floresta-sur-floresta-4-ambientes.html"
+BASE_URL = "https://www.zonaprop.com.ar/inmuebles-alquiler-capital-federal-villa-devoto-villa-santa-rita-flores-floresta-caballito-villa-del-parque-floresta-norte-floresta-floresta-sur-floresta-flores-norte-flores-flores-sur-flores-4-habitaciones.html"
 
 PAGES = list(range(1, 6))
 MAX_PRECIO_ARS = 2_000_000
