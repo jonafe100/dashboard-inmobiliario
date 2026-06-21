@@ -284,9 +284,9 @@ def calcular_score(df):
 
     pesos = {
         "cochera": 8,
-        "balcon": 6,
-        "mascotas": 6,
-        "terraza": 5,
+        "balcon": 7,
+        "mascotas": 10,
+        "terraza": 6,
         "parrilla": 4,
         "pileta": 4,
         "luminoso": 4,
