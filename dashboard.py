@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import glob
 import os
+import re
 
 st.set_page_config(
     page_title="Dashboard Inmobiliario",
@@ -10,28 +11,33 @@ st.set_page_config(
 )
 
 # =====================
-# CSS MOBILE FIRST
+# CSS
 # =====================
 
 st.markdown("""
 <style>
+.stApp {
+    background: #ffffff !important;
+    color: #1f2937 !important;
+}
+
 .block-container {
-    padding-top: 1.2rem;
+    padding-top: 1rem;
     padding-left: 1rem;
     padding-right: 1rem;
 }
 
-[data-testid="stMetricValue"] {
-    font-size: 1.8rem;
+h1, h2, h3, p, span, div {
+    color: #1f2937;
 }
 
 .property-card {
-    border: 1px solid #e6e6e6;
-    border-radius: 16px;
+    border: 1px solid #e5e7eb;
+    border-radius: 18px;
     padding: 18px;
     margin-bottom: 18px;
     background: #ffffff;
-    box-shadow: 0 2px 10px rgba(0,0,0,0.04);
+    box-shadow: 0 4px 14px rgba(0,0,0,0.06);
 }
 
 .property-title {
@@ -43,39 +49,58 @@ st.markdown("""
 .property-text {
     color: #4b5563;
     line-height: 1.45;
+    margin-bottom: 10px;
 }
 
 .badge {
     display: inline-block;
-    padding: 4px 9px;
-    margin: 3px 3px 3px 0;
+    padding: 5px 10px;
+    margin: 3px 4px 3px 0;
     border-radius: 999px;
     background: #f3f4f6;
+    color: #374151;
     font-size: 0.85rem;
+    font-weight: 600;
 }
 
-.score-box {
+.score-pill {
+    display: inline-block;
+    padding: 6px 12px;
+    border-radius: 999px;
+    background: #ede9fe;
+    color: #5b21b6;
     font-weight: 800;
-    font-size: 1rem;
-    color: #111827;
+    margin-top: 6px;
+}
+
+.ver-mas {
+    color: #7c3aed;
+    font-weight: 700;
+    margin-top: 8px;
+}
+
+[data-testid="stExpander"] {
+    border: none !important;
+    box-shadow: none !important;
+    background: transparent !important;
+}
+
+[data-testid="stExpander"] summary {
+    color: #7c3aed !important;
+    font-weight: 700 !important;
+}
+
+[data-testid="stMetricValue"] {
+    font-size: 1.7rem;
 }
 
 @media (max-width: 768px) {
-    .block-container {
-        padding-left: 0.8rem;
-        padding-right: 0.8rem;
-    }
-
     h1 {
         font-size: 2rem !important;
     }
 
     h2, h3 {
         font-size: 1.35rem !important;
-    }
-
-    [data-testid="stMetricValue"] {
-        font-size: 1.45rem;
     }
 
     .property-card {
@@ -85,6 +110,10 @@ st.markdown("""
 
     .property-title {
         font-size: 1.2rem;
+    }
+
+    [data-testid="stDataFrame"] {
+        font-size: 0.8rem;
     }
 }
 </style>
@@ -123,6 +152,40 @@ def es_url_valida(valor):
     return v.startswith("http") and v not in ["nan", "none", ""]
 
 
+def normalizar_texto(valor):
+    if pd.isna(valor):
+        return ""
+    texto = str(valor).lower()
+    texto = re.sub(r"[^a-z0-9áéíóúñ ]", " ", texto)
+    texto = re.sub(r"\s+", " ", texto).strip()
+    return texto
+
+
+def normalizar_direccion(valor):
+    texto = normalizar_texto(valor)
+
+    cortes = [
+        "capital federal",
+        "departamento",
+        "alquiler",
+        "excelente",
+        "hermoso",
+        "oportunidad",
+        "contacto",
+        "whatsapp",
+        "corredor responsable",
+    ]
+
+    for corte in cortes:
+        if corte in texto:
+            texto = texto.split(corte)[0].strip()
+
+    texto = re.sub(r"\b(caba|cap fed)\b", "", texto)
+    texto = re.sub(r"\s+", " ", texto).strip()
+
+    return texto
+
+
 def preparar_df(df):
     if df is None:
         return None
@@ -146,6 +209,17 @@ def preparar_df(df):
 
     if "url" in df.columns:
         df["url"] = df["url"].apply(lambda x: x if es_url_valida(x) else None)
+
+    if "direccion" in df.columns:
+        df["direccion_normalizada"] = df["direccion"].apply(normalizar_direccion)
+
+        if "precio_m2" in df.columns:
+            df = (
+                df.sort_values(["direccion_normalizada", "precio_m2"], ascending=[True, True])
+                .drop_duplicates(subset=["direccion_normalizada"], keep="first")
+            )
+        else:
+            df = df.drop_duplicates(subset=["direccion_normalizada"], keep="first")
 
     return df
 
@@ -212,11 +286,10 @@ def calcular_score(df):
 
     if "m2" in df.columns and df["m2"].notna().any():
         promedio_m2 = df["m2"].mean()
-        df["score"] += df["m2"].apply(
-            lambda x: 3 if pd.notna(x) and x >= promedio_m2 else 0
-        )
+        df["score"] += df["m2"].apply(lambda x: 3 if pd.notna(x) and x >= promedio_m2 else 0)
 
     df["score"] = df["score"].round(0).clip(0, 100).astype(int)
+
     return df
 
 
@@ -240,34 +313,20 @@ def aplicar_filtros(df, key_prefix):
         if "m2" in df.columns and df["m2"].notna().any():
             min_m2 = int(df["m2"].min())
             max_m2 = int(df["m2"].max())
-
             if min_m2 < max_m2:
-                m2_min = st.slider(
-                    "M² mínimo",
-                    min_m2,
-                    max_m2,
-                    min_m2,
-                    key=f"{key_prefix}_m2"
-                )
+                m2_min = st.slider("M² mínimo", min_m2, max_m2, min_m2, key=f"{key_prefix}_m2")
                 df = df[df["m2"] >= m2_min]
 
         if "precio_m2" in df.columns and df["precio_m2"].notna().any():
             min_pm2 = int(df["precio_m2"].min())
             max_pm2 = int(df["precio_m2"].max())
-
             if min_pm2 < max_pm2:
-                pm2_max = st.slider(
-                    "Precio m² máximo",
-                    min_pm2,
-                    max_pm2,
-                    max_pm2,
-                    key=f"{key_prefix}_pm2"
-                )
+                pm2_max = st.slider("Precio m² máximo", min_pm2, max_pm2, max_pm2, key=f"{key_prefix}_pm2")
                 df = df[df["precio_m2"] <= pm2_max]
 
-        c1, c2 = st.columns(2)
+        col1, col2 = st.columns(2)
 
-        filtros_bool = [
+        filtros = [
             ("mascotas", "🐶 Mascotas"),
             ("balcon", "🌿 Balcón"),
             ("cochera", "🚗 Cochera"),
@@ -277,10 +336,9 @@ def aplicar_filtros(df, key_prefix):
             ("luminoso", "💡 Luminoso"),
         ]
 
-        for idx, (col, label) in enumerate(filtros_bool):
+        for i, (col, label) in enumerate(filtros):
             if col in df.columns:
-                cont = c1 if idx % 2 == 0 else c2
-                with cont:
+                with col1 if i % 2 == 0 else col2:
                     if st.checkbox(label, key=f"{key_prefix}_{col}"):
                         df = df[df[col] == True]
 
@@ -326,10 +384,9 @@ def render_card(row):
     st.markdown(f"**Precio:** {row.get('precio_raw', '-')}")
     st.markdown(f"**M²:** {row.get('m2', '-')}")
     st.markdown(f"**Precio/m²:** {formato_money(row.get('precio_m2', None))}")
-    st.markdown(f'<div class="score-box">Score: {row.get("score", 0)}</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="score-pill">Score: {row.get("score", 0)}</div>', unsafe_allow_html=True)
 
     amenities = []
-
     for col, label in [
         ("cochera", "🚗 Cochera"),
         ("balcon", "🌿 Balcón"),
@@ -391,10 +448,9 @@ def mostrar_dashboard(df, archivo, titulo):
     top_score = (
         df_filtrado
         .sort_values(by=sort_cols, ascending=ascending, na_position="last")
-        .head(9)
+        .head(8)
     )
 
-    # Mobile-first: una tarjeta por fila. En desktop se ve prolijo igual.
     for _, row in top_score.iterrows():
         render_card(row)
 
