@@ -14,7 +14,7 @@ USD_TO_ARS = 1500
 MAX_RETRIES = 3
 
 fecha_extraccion = datetime.now().strftime("%Y-%m-%d")
-OUTPUT_FILE = f"zonaprop {datetime.now().strftime('%d.%m')}.csv"
+OUTPUT_FILE = "zonaprop_actual.csv"
 
 CARD = "div.postingCard-module__posting-container"
 

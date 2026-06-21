@@ -539,7 +539,12 @@ def mostrar_dashboard(df, archivo, titulo):
 tab1, tab2 = st.tabs(["🏠 Zonaprop", "🟡 MercadoLibre"])
 
 with tab1:
-    df_zona, archivo_zona = cargar_ultimo_csv("zonaprop")
+    try:
+        df_zona = pd.read_csv("zonaprop_actual.csv", sep=";")
+        archivo_zona = "zonaprop_actual.csv"
+    except Exception:
+        df_zona, archivo_zona = cargar_ultimo_csv("zonaprop")
+
     mostrar_dashboard(df_zona, archivo_zona, "🏠 Dashboard Zonaprop")
 
 with tab2:
