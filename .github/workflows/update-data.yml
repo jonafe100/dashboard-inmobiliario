@@ -1,0 +1,36 @@
+name: Actualizar Zonaprop
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 11 * * *"
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Descargar repo
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Instalar dependencias
+        run: pip install -r requirements.txt
+
+      - name: Instalar Chromium
+        run: playwright install chromium
+
+      - name: Ejecutar scraper
+        run: python scraper.py
+
+      - name: Subir CSV actualizado
+        run: |
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          git add *.csv
+          git commit -m "Actualizacion automatica" || echo "Sin cambios"
+          git push
