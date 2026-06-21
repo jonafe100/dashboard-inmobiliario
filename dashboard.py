@@ -79,6 +79,17 @@ h1, h2, h3, p, span, div {
     margin-top: 8px;
 }
 
+.stLinkButton a {
+    background: #7c3aed !important;
+    color: #ffffff !important;
+    border: 1px solid #7c3aed !important;
+}
+
+.stLinkButton a:hover {
+    background: #6d28d9 !important;
+    color: #ffffff !important;
+}
+
 [data-testid="stExpander"] {
     border: none !important;
     box-shadow: none !important;

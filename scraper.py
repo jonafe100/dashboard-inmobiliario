@@ -350,7 +350,10 @@ def load_page(page_number):
         print(f"   Intento {attempt}/{MAX_RETRIES}")
 
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=False)
+	browser = p.chromium.launch(
+    	headless=True,
+    	args=["--disable-dev-shm-usage"]
+	)
             page = browser.new_page()
             page.goto(url, wait_until="domcontentloaded")
 
