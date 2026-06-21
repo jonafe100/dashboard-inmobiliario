@@ -7,7 +7,7 @@ import os
 
 # ================= CONFIG =================
 
-BASE_URL = "https://www.zonaprop.com.ar/inmuebles-alquiler-capital-federal-villa-devoto-villa-santa-rita-flores-floresta-caballito-villa-del-parque-floresta-norte-floresta-floresta-sur-floresta-flores-norte-flores-flores-sur-flores-4-habitaciones.html"
+BASE_URL = "https://www.zonaprop.com.ar/inmuebles-alquiler-capital-federal-villa-devoto-villa-santa-rita-villa-general-mitre-villa-del-parque-villa-luro-la-paternal-caballito-flores-floresta-con-balcon-4-ambientes.html"
 
 PAGES = list(range(1, 6))
 MAX_PRECIO_ARS = 2_000_000
@@ -17,7 +17,6 @@ MAX_RETRIES = 3
 fecha_extraccion = datetime.now().strftime("%Y-%m-%d")
 OUTPUT_FILE = "zonaprop_actual.csv"
 
-# En GitHub Actions corre oculto. En tu PC abre navegador.
 HEADLESS = True if os.getenv("GITHUB_ACTIONS") == "true" else False
 
 CARD = "div.postingCard-module__posting-container"
@@ -25,10 +24,9 @@ CARD = "div.postingCard-module__posting-container"
 BARRIOS_VALIDOS = sorted([
     "Villa General Mitre",
     "Villa Santa Rita",
-    "Villa Devoto",
-    "Villa Luro",
     "Villa del Parque",
     "Villa Devoto",
+    "Villa Luro",
     "Floresta Norte",
     "Floresta Sur",
     "La Paternal",
@@ -96,6 +94,8 @@ def normalizar_barrio(barrio):
         return "Villa del Parque"
     if "villa devoto" in b:
         return "Villa Devoto"
+    if "villa luro" in b:
+        return "Villa Luro"
     if "la paternal" in b:
         return "La Paternal"
     if "floresta norte" in b:
@@ -108,8 +108,6 @@ def normalizar_barrio(barrio):
         return "Flores"
     if "caballito" in b:
         return "Caballito"
-    if "villa luro" in b:
-        return "Villa Luro"
 
     return barrio
 
@@ -118,7 +116,7 @@ def detectar_barrio(texto):
     if not texto:
         return None
 
-    t = texto.lower()
+    t = str(texto).lower()
 
     for barrio in BARRIOS_VALIDOS:
         if barrio.lower() in t:
@@ -150,6 +148,7 @@ def limpiar_direccion(direccion):
         "WhatsApp",
         "Super destacado",
         "Destacado",
+        "Corredor Responsable",
     ]
 
     for corte in cortes:
@@ -220,9 +219,11 @@ def parsear_texto_propiedad(texto):
 
     if not direccion:
         posibles = re.split(r"[·•‧∙⋅]", t)
+
         for p in posibles:
             p = p.strip()
             low = p.lower()
+
             if (
                 re.search(r"\d+", p)
                 and "$" not in p
@@ -260,6 +261,7 @@ def extract_real_url(card):
                 return "https://www.zonaprop.com.ar" + href if href.startswith("/") else href
     except Exception:
         pass
+
     return None
 
 
@@ -309,6 +311,11 @@ def scrape_cards(cards, page_number):
         texto = clean_text(card.inner_text())
         datos = parsear_texto_propiedad(texto)
 
+        barrio_detectado = (
+            detectar_barrio(texto)
+            or detectar_barrio(datos.get("direccion"))
+        )
+
         precio_num = datos["precio_num"]
         moneda = datos["moneda"]
 
@@ -325,7 +332,7 @@ def scrape_cards(cards, page_number):
         rows.append({
             "fecha": fecha_extraccion,
             "pagina": page_number,
-            "barrio": detectar_barrio(texto),
+            "barrio": barrio_detectado,
             "direccion": datos["direccion"],
             "precio_raw": datos["precio_raw"],
             "moneda": moneda,
@@ -451,6 +458,9 @@ def main():
 
     print(f"\n✔ Archivo generado correctamente: {OUTPUT_FILE}")
     print(f"✔ Total propiedades: {len(df)}")
+
+    print("\nBarrios detectados:")
+    print(df["barrio"].value_counts(dropna=False))
 
 
 if __name__ == "__main__":
