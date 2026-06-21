@@ -108,6 +108,8 @@ def normalizar_barrio(barrio):
         return "Flores"
     if "caballito" in b:
         return "Caballito"
+    if "villa luro" in b:
+        return "Villa Luro"
 
     return barrio
 
