@@ -3,6 +3,7 @@ import pandas as pd
 from datetime import datetime
 import re
 import time
+import os
 
 # ================= CONFIG =================
 
@@ -15,6 +16,9 @@ MAX_RETRIES = 3
 
 fecha_extraccion = datetime.now().strftime("%Y-%m-%d")
 OUTPUT_FILE = "zonaprop_actual.csv"
+
+# En GitHub Actions corre oculto. En tu PC abre navegador.
+HEADLESS = True if os.getenv("GITHUB_ACTIONS") == "true" else False
 
 CARD = "div.postingCard-module__posting-container"
 
@@ -351,16 +355,30 @@ def load_page(page_number):
 
         with sync_playwright() as p:
             browser = p.chromium.launch(
-                headless=True,
+                headless=HEADLESS,
                 args=["--disable-dev-shm-usage"]
             )
 
-            page = browser.new_page()
-            page.goto(url, wait_until="domcontentloaded")
+            page = browser.new_page(
+                user_agent=(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/120.0.0.0 Safari/537.36"
+                )
+            )
 
             try:
-                page.wait_for_selector(CARD, timeout=10000)
+                page.goto(url, wait_until="domcontentloaded", timeout=45000)
+                page.wait_for_timeout(6000)
+
+                for _ in range(5):
+                    page.mouse.wheel(0, 1200)
+                    page.wait_for_timeout(1200)
+
                 cards = page.query_selector_all(CARD)
+
+                if not cards:
+                    cards = page.query_selector_all("div[class*='posting']")
 
                 if cards:
                     print(f"   ✔ Cards encontradas: {len(cards)}")
@@ -368,12 +386,18 @@ def load_page(page_number):
                     browser.close()
                     return data
 
+                print("   ⚠ No se encontraron cards")
+
             except Exception as e:
                 print(f"   ⚠ Error: {e}")
-                browser.close()
-                time.sleep(2)
 
+            finally:
+                browser.close()
+                time.sleep(3)
+
+    print(f"   ❌ Página {page_number} omitida")
     return []
+
 
 def main():
     all_rows = []
@@ -382,6 +406,10 @@ def main():
         all_rows.extend(load_page(page_number))
 
     df = pd.DataFrame(all_rows)
+
+    if df.empty:
+        print("\n❌ No se encontraron propiedades. No se sobrescribe el CSV anterior.")
+        return
 
     columnas = [
         "fecha",
