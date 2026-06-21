@@ -31,6 +31,7 @@ def cargar_ultimo_csv(prefijo):
 def es_url_valida(valor):
     if pd.isna(valor):
         return False
+
     v = str(valor).strip().lower()
     return v.startswith("http") and v not in ["nan", "none", ""]
 
@@ -41,19 +42,45 @@ def preparar_df(df):
 
     df = df.copy()
 
-    for col in ["precio_m2", "m2", "ambientes", "expensas", "dormitorios", "banos"]:
+    columnas_numericas = [
+        "precio_m2",
+        "m2",
+        "ambientes",
+        "expensas",
+        "dormitorios",
+        "banos",
+    ]
+
+    for col in columnas_numericas:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
 
-    for col in ["mascotas", "balcon", "cochera", "terraza", "pileta", "parrilla", "luminoso"]:
+    columnas_bool = [
+        "mascotas",
+        "balcon",
+        "cochera",
+        "terraza",
+        "pileta",
+        "parrilla",
+        "luminoso",
+    ]
+
+    for col in columnas_bool:
         if col in df.columns:
-            df[col] = df[col].astype(str).str.lower().isin(["true", "1", "sí", "si"])
+            df[col] = (
+                df[col]
+                .astype(str)
+                .str.lower()
+                .isin(["true", "1", "sí", "si"])
+            )
 
     if "imagen" in df.columns:
         df["imagen"] = df["imagen"].apply(lambda x: x if es_url_valida(x) else None)
         df.loc[
-            df["imagen"].astype(str).str.contains("/empresas/|logo", case=False, na=False),
-            "imagen"
+            df["imagen"]
+            .astype(str)
+            .str.contains("/empresas/|logo", case=False, na=False),
+            "imagen",
         ] = None
 
     if "url" in df.columns:
@@ -93,24 +120,23 @@ def calcular_score(df):
     df = df.copy()
     df["score"] = 0
 
-    # Barrio pesa fuerte
     if "barrio" in df.columns:
         df["score_barrio"] = df["barrio"].apply(score_barrio)
         df["score"] += df["score_barrio"] * 0.40
 
-    # Precio/m² pesa 35%
     if "precio_m2" in df.columns and df["precio_m2"].notna().any():
         max_pm2 = df["precio_m2"].max()
         min_pm2 = df["precio_m2"].min()
 
         if max_pm2 > min_pm2:
-            df["score_precio"] = 35 * (1 - ((df["precio_m2"] - min_pm2) / (max_pm2 - min_pm2)))
+            df["score_precio"] = 35 * (
+                1 - ((df["precio_m2"] - min_pm2) / (max_pm2 - min_pm2))
+            )
         else:
             df["score_precio"] = 20
 
         df["score"] += df["score_precio"].fillna(0)
 
-    # Amenities
     pesos = {
         "cochera": 8,
         "balcon": 6,
@@ -125,10 +151,11 @@ def calcular_score(df):
         if col in df.columns:
             df["score"] += df[col].astype(bool) * peso
 
-    # M² suma poco, para no premiar casas destruidas solo por tamaño
     if "m2" in df.columns and df["m2"].notna().any():
         promedio_m2 = df["m2"].mean()
-        df["score"] += df["m2"].apply(lambda x: 3 if pd.notna(x) and x >= promedio_m2 else 0)
+        df["score"] += df["m2"].apply(
+            lambda x: 3 if pd.notna(x) and x >= promedio_m2 else 0
+        )
 
     df["score"] = df["score"].round(0).clip(0, 100).astype(int)
 
@@ -140,7 +167,12 @@ def aplicar_filtros(df, key_prefix):
 
     if "barrio" in df.columns:
         barrios = sorted(df["barrio"].dropna().unique())
-        barrio = st.sidebar.selectbox("Barrio", ["Todos"] + barrios, key=f"{key_prefix}_barrio")
+
+        barrio = st.sidebar.selectbox(
+            "Barrio",
+            ["Todos"] + barrios,
+            key=f"{key_prefix}_barrio",
+        )
 
         if barrio != "Todos":
             df = df[df["barrio"] == barrio]
@@ -149,7 +181,7 @@ def aplicar_filtros(df, key_prefix):
         ambientes = st.sidebar.multiselect(
             "Ambientes",
             sorted(df["ambientes"].dropna().unique()),
-            key=f"{key_prefix}_ambientes"
+            key=f"{key_prefix}_ambientes",
         )
 
         if ambientes:
@@ -165,7 +197,7 @@ def aplicar_filtros(df, key_prefix):
                 min_m2,
                 max_m2,
                 min_m2,
-                key=f"{key_prefix}_m2"
+                key=f"{key_prefix}_m2",
             )
             df = df[df["m2"] >= m2_min]
         else:
@@ -181,7 +213,7 @@ def aplicar_filtros(df, key_prefix):
                 min_pm2,
                 max_pm2,
                 max_pm2,
-                key=f"{key_prefix}_pm2"
+                key=f"{key_prefix}_pm2",
             )
             df = df[df["precio_m2"] <= pm2_max]
         else:
@@ -206,6 +238,7 @@ def aplicar_filtros(df, key_prefix):
 def texto_corto(valor, limite=180):
     if pd.isna(valor):
         return ""
+
     texto = str(valor)
     return texto[:limite] + "..." if len(texto) > limite else texto
 
@@ -223,14 +256,22 @@ def mostrar_dashboard(df, archivo, titulo):
 
     df_filtrado = aplicar_filtros(df, titulo)
 
+    if df_filtrado.empty:
+        st.warning("No hay propiedades con los filtros actuales.")
+        return
+
     c1, c2, c3, c4 = st.columns(4)
+
     c1.metric("Propiedades", len(df_filtrado))
 
-    if "score" in df_filtrado.columns and not df_filtrado.empty:
+    if "score" in df_filtrado.columns:
         c2.metric("Score promedio", int(df_filtrado["score"].mean()))
 
     if "precio_m2" in df_filtrado.columns and df_filtrado["precio_m2"].notna().any():
-        c3.metric("Promedio $/m²", f"$ {int(df_filtrado['precio_m2'].mean()):,}".replace(",", "."))
+        c3.metric(
+            "Promedio $/m²",
+            f"$ {int(df_filtrado['precio_m2'].mean()):,}".replace(",", "."),
+        )
 
     if "m2" in df_filtrado.columns and df_filtrado["m2"].notna().any():
         c4.metric("Promedio m²", round(df_filtrado["m2"].mean(), 1))
@@ -238,15 +279,35 @@ def mostrar_dashboard(df, archivo, titulo):
     column_config = {
         "url": st.column_config.LinkColumn("Aviso", display_text="Abrir"),
         "imagen": st.column_config.ImageColumn("Imagen"),
-        "precio_m2": st.column_config.NumberColumn("Precio m²", format="$ %d"),
-        "score": st.column_config.ProgressColumn("Score", min_value=0, max_value=100),
+        "score": st.column_config.ProgressColumn(
+            "Score",
+            min_value=0,
+            max_value=100,
+        ),
     }
+
+    if "precio_m2" in df_filtrado.columns:
+        column_config["precio_m2"] = st.column_config.NumberColumn(
+            "Precio m²",
+            format="$ %d",
+        )
 
     st.subheader("🏆 Mejores oportunidades por score")
 
+    sort_cols = ["score"]
+    ascending = [False]
+
+    if "precio_m2" in df_filtrado.columns:
+        sort_cols.append("precio_m2")
+        ascending.append(True)
+
     top_score = (
         df_filtrado
-        .sort_values(["score", "precio_m2"], ascending=[False, True])
+        .sort_values(
+            by=sort_cols,
+            ascending=ascending,
+            na_position="last",
+        )
         .head(12)
     )
 
@@ -275,8 +336,10 @@ def mostrar_dashboard(df, archivo, titulo):
             st.markdown(f"**Precio:** {row.get('precio_raw', '')}")
             st.markdown(f"**M²:** {row.get('m2', '')}")
 
-            if pd.notna(row.get("precio_m2", None)):
-                st.markdown(f"**Precio/m²:** $ {int(row['precio_m2']):,}".replace(",", "."))
+            if "precio_m2" in row and pd.notna(row.get("precio_m2", None)):
+                st.markdown(
+                    f"**Precio/m²:** $ {int(row['precio_m2']):,}".replace(",", ".")
+                )
             else:
                 st.markdown("**Precio/m²:** -")
 
@@ -306,25 +369,31 @@ def mostrar_dashboard(df, archivo, titulo):
 
     st.subheader("🔥 Top 20 menor precio por m²")
 
-    top_pm2 = (
-        df_filtrado
-        .dropna(subset=["precio_m2"])
-        .sort_values("precio_m2", ascending=True)
-        .head(20)
-    )
+    if "precio_m2" in df_filtrado.columns:
+        top_pm2 = (
+            df_filtrado
+            .dropna(subset=["precio_m2"])
+            .sort_values("precio_m2", ascending=True)
+            .head(20)
+        )
+    else:
+        top_pm2 = pd.DataFrame()
 
-    st.dataframe(
-        top_pm2,
-        use_container_width=True,
-        column_config=column_config
-    )
+    if top_pm2.empty:
+        st.info("No hay datos suficientes para calcular el Top 20 por precio/m².")
+    else:
+        st.dataframe(
+            top_pm2,
+            use_container_width=True,
+            column_config=column_config,
+        )
 
     st.subheader("📋 Todas las propiedades")
 
     st.dataframe(
         df_filtrado,
         use_container_width=True,
-        column_config=column_config
+        column_config=column_config,
     )
 
 
