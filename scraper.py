@@ -7,7 +7,7 @@ import os
 
 # ================= CONFIG =================
 
-BASE_URL = "https://www.zonaprop.com.ar/casas-departamentos-ph-alquiler-villa-devoto-villa-santa-rita-villa-general-mitre-villa-del-parque-villa-luro-la-paternal-caballito-flores-floresta-floresta-norte-floresta-floresta-sur-floresta-flores-norte-flores-mas-de-4-ambientes-menos-2000000-pesos.html"
+BASE_URL = "https://www.zonaprop.com.ar/inmuebles-alquiler-capital-federal-villa-devoto-villa-santa-rita-villa-general-mitre-villa-del-parque-villa-luro-la-paternal-caballito-flores-floresta-con-balcon-4-ambientes.html"
 
 PAGES = list(range(1, 6))
 MAX_PRECIO_ARS = 2_000_000
@@ -17,6 +17,7 @@ MAX_RETRIES = 3
 fecha_extraccion = datetime.now().strftime("%Y-%m-%d")
 OUTPUT_FILE = "zonaprop_actual.csv"
 
+# En GitHub Actions corre oculto. En tu PC abre navegador.
 HEADLESS = True if os.getenv("GITHUB_ACTIONS") == "true" else False
 
 CARD = "div.postingCard-module__posting-container"
@@ -42,6 +43,18 @@ def clean_text(text):
     if not text:
         return ""
     return re.sub(r"\s+", " ", text.replace("\n", " ").replace("\r", " ")).strip()
+
+
+def safe_int(valor):
+    if valor is None:
+        return None
+
+    limpio = re.sub(r"[^\d]", "", str(valor))
+
+    if limpio == "":
+        return None
+
+    return int(limpio)
 
 
 def contains_any(text, keywords):
@@ -169,40 +182,42 @@ def parsear_texto_propiedad(texto):
     precio_num = None
 
     if moneda == "USD":
-        m = re.search(r"(USD|U\$S)\s*([\d\.]+)", t, re.I)
+        m = re.search(r"(USD|U\$S)\s*([\d\.]*)", t, re.I)
         if m:
-            precio_raw = f"USD {m.group(2)}"
-            precio_num = int(m.group(2).replace(".", ""))
+            precio_num = safe_int(m.group(2))
+            if precio_num:
+                precio_raw = f"USD {m.group(2)}"
     else:
-        m = re.search(r"\$\s*([\d\.]+)", t)
+        m = re.search(r"\$\s*([\d\.]*)", t)
         if m:
-            precio_raw = f"$ {m.group(1)}"
-            precio_num = int(m.group(1).replace(".", ""))
+            precio_num = safe_int(m.group(1))
+            if precio_num:
+                precio_raw = f"$ {m.group(1)}"
 
     expensas = None
-    m_exp = re.search(r"\$\s*([\d\.]+)\s*Expensas", t, re.I)
+    m_exp = re.search(r"\$\s*([\d\.]*)\s*Expensas", t, re.I)
     if m_exp:
-        expensas = int(m_exp.group(1).replace(".", ""))
+        expensas = safe_int(m_exp.group(1))
 
     m2 = None
     m_m2 = re.search(r"(\d+)\s*m²", t, re.I)
     if m_m2:
-        m2 = int(m_m2.group(1))
+        m2 = safe_int(m_m2.group(1))
 
     ambientes = None
     m_amb = re.search(r"(\d+)\s*amb", t, re.I)
     if m_amb:
-        ambientes = int(m_amb.group(1))
+        ambientes = safe_int(m_amb.group(1))
 
     dormitorios = None
     m_dorm = re.search(r"(\d+)\s*dorm", t, re.I)
     if m_dorm:
-        dormitorios = int(m_dorm.group(1))
+        dormitorios = safe_int(m_dorm.group(1))
 
     banos = None
     m_banos = re.search(r"(\d+)\s*bañ", t, re.I)
     if m_banos:
-        banos = int(m_banos.group(1))
+        banos = safe_int(m_banos.group(1))
 
     cochera = bool(re.search(r"\bcoch\.?\b|\bcochera\b|\bgarage\b", t, re.I))
 
