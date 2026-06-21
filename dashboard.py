@@ -250,6 +250,7 @@ def score_barrio(valor):
         "caballito": 75,
         "villa del parque": 70,
         "villa devoto": 70,
+        "villa luro": 70,
     }
 
     for zona, score in scores.items():
