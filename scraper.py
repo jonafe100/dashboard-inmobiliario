@@ -1,24 +1,27 @@
 from playwright.sync_api import sync_playwright
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta
 import re
 import time
 import os
 
 # ================= CONFIG =================
 
-BASE_URL = "https://www.zonaprop.com.ar/inmuebles-alquiler-villa-devoto-villa-santa-rita-villa-general-mitre-villa-del-parque-villa-luro-la-paternal-caballito-flores-floresta-con-balcon-4-ambientes.html"
+BASE_URL = "https://www.zonaprop.com.ar/inmuebles-alquiler-capital-federal-villa-devoto-villa-santa-rita-villa-general-mitre-villa-del-parque-villa-luro-la-paternal-caballito-flores-floresta-con-balcon-4-ambientes.html"
 
 PAGES = list(range(1, 6))
 MAX_PRECIO_ARS = 2_000_000
 USD_TO_ARS = 1500
 MAX_RETRIES = 3
 
-fecha_extraccion = datetime.now().strftime("%Y-%m-%d")
 OUTPUT_FILE = "zonaprop_actual.csv"
+TRACKING_FILE = "zonaprop_tracking.csv"
 
-# En GitHub Actions corre oculto. En tu PC abre navegador.
+fecha_extraccion = datetime.now().strftime("%Y-%m-%d")
 HEADLESS = True if os.getenv("GITHUB_ACTIONS") == "true" else False
+
+# Si tarda demasiado o Zonaprop bloquea, poner en False
+EXTRAER_FECHA_PUBLICACION = True
 
 CARD = "div.postingCard-module__posting-container"
 
@@ -48,13 +51,8 @@ def clean_text(text):
 def safe_int(valor):
     if valor is None:
         return None
-
     limpio = re.sub(r"[^\d]", "", str(valor))
-
-    if limpio == "":
-        return None
-
-    return int(limpio)
+    return int(limpio) if limpio else None
 
 
 def contains_any(text, keywords):
@@ -171,6 +169,86 @@ def limpiar_direccion(direccion):
             break
 
     return d.strip() if d.strip() else None
+
+
+def extract_id_aviso(url):
+    if not url:
+        return None
+
+    m = re.search(r"-(\d+)\.html", url)
+    if m:
+        return m.group(1)
+
+    return url
+
+
+def parse_fecha_publicacion_zonaprop(texto):
+    if not texto:
+        return None, None
+
+    t = clean_text(texto).lower()
+    hoy = datetime.now().date()
+
+    m = re.search(r"publicado\s+hace\s+(\d+)\s+d[ií]a", t)
+    if m:
+        dias = safe_int(m.group(1))
+        fecha = hoy - timedelta(days=dias)
+        return fecha.strftime("%Y-%m-%d"), dias
+
+    m = re.search(r"publicado\s+hace\s+(\d+)\s+semana", t)
+    if m:
+        semanas = safe_int(m.group(1))
+        dias = semanas * 7
+        fecha = hoy - timedelta(days=dias)
+        return fecha.strftime("%Y-%m-%d"), dias
+
+    m = re.search(r"publicado\s+hace\s+(\d+)\s+mes", t)
+    if m:
+        meses = safe_int(m.group(1))
+        dias = meses * 30
+        fecha = hoy - timedelta(days=dias)
+        return fecha.strftime("%Y-%m-%d"), dias
+
+    if "publicado hoy" in t or "publicado hace instantes" in t:
+        return hoy.strftime("%Y-%m-%d"), 0
+
+    if "publicado ayer" in t:
+        fecha = hoy - timedelta(days=1)
+        return fecha.strftime("%Y-%m-%d"), 1
+
+    return None, None
+
+
+def extraer_fecha_publicacion_desde_detalle(context, url):
+    if not EXTRAER_FECHA_PUBLICACION or not url:
+        return None, None, None
+
+    detail_page = None
+
+    try:
+        detail_page = context.new_page()
+        detail_page.goto(url, wait_until="domcontentloaded", timeout=30000)
+        detail_page.wait_for_timeout(2500)
+
+        texto = clean_text(detail_page.inner_text("body"))
+
+        m = re.search(
+            r"Publicado\s+(?:hace\s+\d+\s+(?:d[ií]as?|semanas?|meses?)|hoy|ayer|hace instantes)",
+            texto,
+            re.I
+        )
+
+        publicado_raw = m.group(0) if m else None
+        fecha_publicacion, antiguedad_dias = parse_fecha_publicacion_zonaprop(publicado_raw or texto)
+
+        return publicado_raw, fecha_publicacion, antiguedad_dias
+
+    except Exception:
+        return None, None, None
+
+    finally:
+        if detail_page:
+            detail_page.close()
 
 
 def parsear_texto_propiedad(texto):
@@ -319,12 +397,15 @@ def build_page_url(page_number):
 
 # ================= SCRAPER =================
 
-def scrape_cards(cards, page_number):
+def scrape_cards(cards, page_number, context):
     rows = []
 
     for card in cards:
         texto = clean_text(card.inner_text())
         datos = parsear_texto_propiedad(texto)
+
+        url_aviso = extract_real_url(card)
+        id_aviso = extract_id_aviso(url_aviso)
 
         barrio_detectado = (
             detectar_barrio(texto)
@@ -344,9 +425,15 @@ def scrape_cards(cards, page_number):
         m2 = datos["m2"]
         precio_m2 = int(round(precio_ars / m2)) if precio_ars and m2 else None
 
+        publicado_raw, fecha_publicacion_zonaprop, antiguedad_zonaprop_dias = extraer_fecha_publicacion_desde_detalle(
+            context,
+            url_aviso
+        )
+
         rows.append({
             "fecha": fecha_extraccion,
             "pagina": page_number,
+            "id_aviso": id_aviso,
             "barrio": barrio_detectado,
             "direccion": datos["direccion"],
             "precio_raw": datos["precio_raw"],
@@ -357,6 +444,9 @@ def scrape_cards(cards, page_number):
             "dormitorios": datos["dormitorios"],
             "banos": datos["banos"],
             "precio_m2": precio_m2,
+            "publicado_zonaprop_raw": publicado_raw,
+            "fecha_publicacion_zonaprop": fecha_publicacion_zonaprop,
+            "antiguedad_zonaprop_dias": antiguedad_zonaprop_dias,
             "mascotas": acepta_mascotas(texto),
             "balcon": contains_any(texto, ["balcón", "balcon"]),
             "cochera": datos["cochera"],
@@ -364,7 +454,7 @@ def scrape_cards(cards, page_number):
             "pileta": contains_any(texto, ["pileta", "piscina"]),
             "parrilla": contains_any(texto, ["parrilla"]),
             "luminoso": contains_any(texto, ["luminoso", "luminosa"]),
-            "url": extract_real_url(card),
+            "url": url_aviso,
             "imagen": extract_image_url(card),
             "texto": texto,
         })
@@ -385,13 +475,15 @@ def load_page(page_number):
                 args=["--disable-dev-shm-usage"]
             )
 
-            page = browser.new_page(
+            context = browser.new_context(
                 user_agent=(
                     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                     "AppleWebKit/537.36 (KHTML, like Gecko) "
                     "Chrome/120.0.0.0 Safari/537.36"
                 )
             )
+
+            page = context.new_page()
 
             try:
                 page.goto(url, wait_until="domcontentloaded", timeout=45000)
@@ -408,7 +500,7 @@ def load_page(page_number):
 
                 if cards:
                     print(f"   ✔ Cards encontradas: {len(cards)}")
-                    data = scrape_cards(cards, page_number)
+                    data = scrape_cards(cards, page_number, context)
                     browser.close()
                     return data
 
@@ -425,6 +517,52 @@ def load_page(page_number):
     return []
 
 
+def aplicar_tracking(df):
+    hoy = pd.to_datetime(fecha_extraccion)
+
+    if "id_aviso" not in df.columns:
+        df["id_aviso"] = df["url"].apply(extract_id_aviso)
+
+    df["id_aviso"] = df["id_aviso"].astype(str)
+
+    if os.path.exists(TRACKING_FILE):
+        tracking = pd.read_csv(TRACKING_FILE, sep=";")
+    else:
+        tracking = pd.DataFrame(columns=["id_aviso", "fecha_primera_vista"])
+
+    tracking["id_aviso"] = tracking["id_aviso"].astype(str)
+
+    df = df.merge(
+        tracking,
+        on="id_aviso",
+        how="left"
+    )
+
+    df["fecha_primera_vista"] = df["fecha_primera_vista"].fillna(fecha_extraccion)
+
+    df["dias_desde_primera_vista"] = (
+        hoy - pd.to_datetime(df["fecha_primera_vista"], errors="coerce")
+    ).dt.days
+
+    df["nueva_publicacion"] = df["dias_desde_primera_vista"] <= 5
+
+    nuevo_tracking = df[["id_aviso", "fecha_primera_vista"]].drop_duplicates()
+
+    tracking_final = (
+        pd.concat([tracking, nuevo_tracking])
+        .drop_duplicates(subset=["id_aviso"], keep="first")
+    )
+
+    tracking_final.to_csv(
+        TRACKING_FILE,
+        sep=";",
+        index=False,
+        encoding="utf-8-sig"
+    )
+
+    return df
+
+
 def main():
     all_rows = []
 
@@ -437,9 +575,18 @@ def main():
         print("\n❌ No se encontraron propiedades. No se sobrescribe el CSV anterior.")
         return
 
+    df = aplicar_tracking(df)
+
     columnas = [
         "fecha",
         "pagina",
+        "id_aviso",
+        "fecha_primera_vista",
+        "dias_desde_primera_vista",
+        "nueva_publicacion",
+        "publicado_zonaprop_raw",
+        "fecha_publicacion_zonaprop",
+        "antiguedad_zonaprop_dias",
         "barrio",
         "direccion",
         "precio_raw",
@@ -476,6 +623,9 @@ def main():
 
     print("\nBarrios detectados:")
     print(df["barrio"].value_counts(dropna=False))
+
+    print("\nNuevas publicaciones:")
+    print(df["nueva_publicacion"].value_counts(dropna=False))
 
 
 if __name__ == "__main__":

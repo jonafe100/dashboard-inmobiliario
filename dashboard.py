@@ -63,6 +63,11 @@ h1, h2, h3, p, span, div {
     font-weight: 600;
 }
 
+.badge-new {
+    background: #dcfce7;
+    color: #166534;
+}
+
 .score-pill {
     display: inline-block;
     padding: 6px 12px;
@@ -71,12 +76,6 @@ h1, h2, h3, p, span, div {
     color: #5b21b6;
     font-weight: 800;
     margin-top: 6px;
-}
-
-.ver-mas {
-    color: #7c3aed;
-    font-weight: 700;
-    margin-top: 8px;
 }
 
 .stLinkButton a {
@@ -203,13 +202,39 @@ def preparar_df(df):
 
     df = df.copy()
 
-    for col in ["precio_m2", "m2", "ambientes", "expensas", "dormitorios", "banos"]:
+    columnas_numericas = [
+        "precio_m2",
+        "m2",
+        "ambientes",
+        "expensas",
+        "dormitorios",
+        "banos",
+        "dias_desde_primera_vista",
+        "antiguedad_zonaprop_dias",
+    ]
+
+    for col in columnas_numericas:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
 
-    for col in ["mascotas", "balcon", "cochera", "terraza", "pileta", "parrilla", "luminoso"]:
+    columnas_bool = [
+        "mascotas",
+        "balcon",
+        "cochera",
+        "terraza",
+        "pileta",
+        "parrilla",
+        "luminoso",
+        "nueva_publicacion",
+    ]
+
+    for col in columnas_bool:
         if col in df.columns:
             df[col] = df[col].astype(str).str.lower().isin(["true", "1", "sí", "si"])
+
+    for col in ["fecha", "fecha_primera_vista", "fecha_publicacion_zonaprop"]:
+        if col in df.columns:
+            df[col] = pd.to_datetime(df[col], errors="coerce").dt.strftime("%Y-%m-%d")
 
     if "imagen" in df.columns:
         df["imagen"] = df["imagen"].apply(lambda x: x if es_url_valida(x) else None)
@@ -296,6 +321,9 @@ def calcular_score(df):
         if col in df.columns:
             df["score"] += df[col].astype(bool) * peso
 
+    if "nueva_publicacion" in df.columns:
+        df["score"] += df["nueva_publicacion"].astype(bool) * 8
+
     if "m2" in df.columns and df["m2"].notna().any():
         promedio_m2 = df["m2"].mean()
         df["score"] += df["m2"].apply(lambda x: 3 if pd.notna(x) and x >= promedio_m2 else 0)
@@ -339,6 +367,7 @@ def aplicar_filtros(df, key_prefix):
         col1, col2 = st.columns(2)
 
         filtros = [
+            ("nueva_publicacion", "🆕 Nuevas publicaciones"),
             ("mascotas", "🐶 Mascotas"),
             ("balcon", "🌿 Balcón"),
             ("cochera", "🚗 Cochera"),
@@ -384,6 +413,9 @@ def render_card(row):
 
     st.markdown(f'<div class="property-title">{barrio}</div>', unsafe_allow_html=True)
 
+    if row.get("nueva_publicacion", False) == True:
+        st.markdown('<span class="badge badge-new">🆕 Nueva publicación</span>', unsafe_allow_html=True)
+
     if direccion:
         st.markdown(f'<div class="property-text">{texto_corto(direccion, 150)}</div>', unsafe_allow_html=True)
 
@@ -396,6 +428,15 @@ def render_card(row):
     st.markdown(f"**Precio:** {row.get('precio_raw', '-')}")
     st.markdown(f"**M²:** {row.get('m2', '-')}")
     st.markdown(f"**Precio/m²:** {formato_money(row.get('precio_m2', None))}")
+
+    if row.get("fecha_publicacion_zonaprop", None):
+        st.markdown(f"**Publicado en Zonaprop:** {row.get('fecha_publicacion_zonaprop')}")
+    elif row.get("publicado_zonaprop_raw", None):
+        st.markdown(f"**Zonaprop:** {row.get('publicado_zonaprop_raw')}")
+
+    if row.get("fecha_primera_vista", None):
+        st.markdown(f"**Primera vez detectado:** {row.get('fecha_primera_vista')}")
+
     st.markdown(f'<div class="score-pill">Score: {row.get("score", 0)}</div>', unsafe_allow_html=True)
 
     amenities = []
@@ -438,15 +479,32 @@ def mostrar_dashboard(df, archivo, titulo):
         st.warning("No hay propiedades con los filtros actuales.")
         return
 
-    k1, k2, k3 = st.columns(3)
+    k1, k2, k3, k4 = st.columns(4)
 
     k1.metric("Propiedades", len(df_filtrado))
 
+    if "nueva_publicacion" in df_filtrado.columns:
+        k2.metric("Nuevas", int(df_filtrado["nueva_publicacion"].sum()))
+
     if "score" in df_filtrado.columns:
-        k2.metric("Score promedio", int(df_filtrado["score"].mean()))
+        k3.metric("Score promedio", int(df_filtrado["score"].mean()))
 
     if "precio_m2" in df_filtrado.columns and df_filtrado["precio_m2"].notna().any():
-        k3.metric("Promedio $/m²", formato_money(df_filtrado["precio_m2"].mean()))
+        k4.metric("Promedio $/m²", formato_money(df_filtrado["precio_m2"].mean()))
+
+    if "nueva_publicacion" in df_filtrado.columns:
+        nuevas = df_filtrado[df_filtrado["nueva_publicacion"] == True]
+
+        if not nuevas.empty:
+            st.subheader("🆕 Nuevas publicaciones")
+            nuevas_top = (
+                nuevas
+                .sort_values(["score", "precio_m2"], ascending=[False, True], na_position="last")
+                .head(5)
+            )
+
+            for _, row in nuevas_top.iterrows():
+                render_card(row)
 
     st.subheader("🏆 Mejores oportunidades")
 
@@ -471,12 +529,15 @@ def mostrar_dashboard(df, archivo, titulo):
     if "precio_m2" in df_filtrado.columns:
         columnas_top = [
             c for c in [
+                "nueva_publicacion",
                 "barrio",
                 "direccion",
                 "precio_raw",
                 "m2",
                 "precio_m2",
                 "score",
+                "fecha_publicacion_zonaprop",
+                "fecha_primera_vista",
                 "url",
             ]
             if c in df_filtrado.columns
@@ -507,6 +568,7 @@ def mostrar_dashboard(df, archivo, titulo):
 
     columnas_tabla = [
         c for c in [
+            "nueva_publicacion",
             "barrio",
             "direccion",
             "precio_raw",
@@ -516,6 +578,10 @@ def mostrar_dashboard(df, archivo, titulo):
             "banos",
             "precio_m2",
             "score",
+            "fecha_publicacion_zonaprop",
+            "publicado_zonaprop_raw",
+            "fecha_primera_vista",
+            "dias_desde_primera_vista",
             "mascotas",
             "balcon",
             "cochera",
