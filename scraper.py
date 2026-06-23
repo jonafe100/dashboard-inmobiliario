@@ -12,7 +12,7 @@ BASE_URL = "https://www.zonaprop.com.ar/inmuebles-alquiler-villa-devoto-villa-sa
 PAGES = list(range(1, 6))
 MAX_PRECIO_ARS = 2_000_000
 USD_TO_ARS = 1500
-MAX_RETRIES = 3
+MAX_RETRIES = 1
 
 OUTPUT_FILE = "zonaprop_actual.csv"
 TRACKING_FILE = "zonaprop_tracking.csv"
