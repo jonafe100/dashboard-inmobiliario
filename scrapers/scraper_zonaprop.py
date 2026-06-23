@@ -1,219 +1,419 @@
 from playwright.sync_api import sync_playwright
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta
 import re
 import time
+import os
 
 # ================= CONFIG =================
 
-BASE_URL = "https://www.zonaprop.com.ar/inmuebles-alquiler-villa-del-parque-villa-santa-rita-villa-general-mitre-flores-floresta-la-paternal-caballito-floresta-norte-floresta-floresta-sur-floresta-4-ambientes.html"
-PAGES = [1, 2, 3, 4, 5, 6]
+BASE_URL = "https://www.zonaprop.com.ar/inmuebles-alquiler-villa-devoto-villa-santa-rita-villa-general-mitre-villa-del-parque-villa-luro-la-paternal-caballito-flores-floresta-con-balcon-4-ambientes.html"
 
-MAX_PRECIO_ARS = 2000000
+PAGES = list(range(1, 6))
+MAX_PRECIO_ARS = 2_000_000
 USD_TO_ARS = 1500
-MAX_RETRIES = 3
+MAX_RETRIES = 1
 
-# Fecha archivo
-fecha_formato = datetime.now().strftime("%d.%m")
-OUTPUT_FILE = f"zonaprop {fecha_formato}.csv"
+OUTPUT_FILE = "zonaprop_actual.csv"
+TRACKING_FILE = "zonaprop_tracking.csv"
 
 fecha_extraccion = datetime.now().strftime("%Y-%m-%d")
+HEADLESS = True if os.getenv("GITHUB_ACTIONS") == "true" else False
 
-# Selectores Zonaprop
+# Si tarda demasiado o Zonaprop bloquea, poner en False
+EXTRAER_FECHA_PUBLICACION = True
+
 CARD = "div.postingCard-module__posting-container"
-TITLE = "h2.postingLocations-module__location-text"
-PRICE = "div.postingPrices-module__price[data-qa='POSTING_CARD_PRICE']"
-LOCATION = "h2.postingLocations-module__location-text[data-qa='POSTING_CARD_LOCATION']"
-IMG_SELECTOR = "img"
+
+BARRIOS_VALIDOS = sorted([
+    "Villa General Mitre",
+    "Villa Santa Rita",
+    "Villa del Parque",
+    "Villa Devoto",
+    "Villa Luro",
+    "Floresta Norte",
+    "Floresta Sur",
+    "La Paternal",
+    "Caballito",
+    "Floresta",
+    "Flores",
+], key=len, reverse=True)
 
 
 # ================= HELPERS =================
 
-def clean_price(text: str):
-    if not text:
-        return None
-    n = re.sub(r"[^\d]", "", text)
-    return int(n) if n.isdigit() else None
-
-
-def detect_currency(text: str):
-    t = text.upper()
-    if "USD" in t or "U$S" in t:
-        return "USD"
-    return "ARS"
-
-
-def extract_m2(text: str):
-    """Busca expresamente un número seguido de m² o m2."""
-    m = re.search(r"(\d+)\s*(m²|m2)", text.lower())
-    return int(m.group(1)) if m else None
-
-
-def normalize_separators(text: str):
-    SEPARADORES = ["·", "•", "‧", "∙", "⋅", "· ", " ·", " •", "• ", "  ·  ", "  •  "]
-    for s in SEPARADORES:
-        text = text.replace(s, "|")
-    while "||" in text:
-        text = text.replace("||", "|")
-    return text
-
-
-def clean_text(text: str):
+def clean_text(text):
     if not text:
         return ""
-    t = text.replace("\n", " ").replace("\r", " ")
-    return re.sub(r"\s+", " ", t).strip()
+    return re.sub(r"\s+", " ", text.replace("\n", " ").replace("\r", " ")).strip()
 
 
-def extract_ambientes(text: str):
-    """Extrae solo ambientes."""
-    m = re.search(r"(\d+)\s*amb", text.lower())
-    return int(m.group(1)) if m else None
+def safe_int(valor):
+    if valor is None:
+        return None
+    limpio = re.sub(r"[^\d]", "", str(valor))
+    return int(limpio) if limpio else None
 
-def contains_any(text, words):
+
+def contains_any(text, keywords):
     if not text:
         return False
-
     t = text.lower()
+    return any(k.lower() in t for k in keywords)
 
-    return any(w.lower() in t for w in words)
+
+def acepta_mascotas(texto):
+    if not texto:
+        return False
+
+    t = texto.lower()
+
+    negativos = [
+        "no se aceptan mascotas",
+        "no se acepta mascotas",
+        "no acepta mascotas",
+        "no aceptan mascotas",
+        "no mascotas",
+        "sin mascotas",
+    ]
+
+    if any(n in t for n in negativos):
+        return False
+
+    positivos = [
+        "acepta mascotas",
+        "se aceptan mascotas",
+        "mascotas",
+        "pet friendly",
+        "permite mascotas",
+    ]
+
+    return any(p in t for p in positivos)
 
 
-def extract_expensas(text):
-    if not text:
+def normalizar_barrio(barrio):
+    if not barrio:
         return None
 
-    m = re.search(
-        r"\$\s*([\d\.]+)\s*expensas",
-        text.lower()
-    )
+    b = str(barrio).lower()
 
-    if not m:
+    if "villa santa rita" in b:
+        return "Villa Santa Rita"
+    if "villa general mitre" in b:
+        return "Villa General Mitre"
+    if "villa del parque" in b:
+        return "Villa del Parque"
+    if "villa devoto" in b:
+        return "Villa Devoto"
+    if "villa luro" in b:
+        return "Villa Luro"
+    if "la paternal" in b:
+        return "La Paternal"
+    if "floresta norte" in b:
+        return "Floresta"
+    if "floresta sur" in b:
+        return "Floresta"
+    if "floresta" in b:
+        return "Floresta"
+    if "flores" in b:
+        return "Flores"
+    if "caballito" in b:
+        return "Caballito"
+
+    return barrio
+
+
+def detectar_barrio(texto):
+    if not texto:
         return None
 
-    return int(
-        m.group(1).replace(".", "")
-    )
+    t = str(texto).lower()
 
-
-def extract_direccion(text):
-    if not text:
-        return None
-
-    texto = text.replace("·", "|")
-    partes = texto.split("|")
-
-    for p in partes:
-        p = p.strip()
-
-        if re.search(r"\d+", p):
-            if "capital federal" not in p.lower():
-                if "m²" not in p.lower():
-                    if "amb" not in p.lower():
-                        return p
+    for barrio in BARRIOS_VALIDOS:
+        if barrio.lower() in t:
+            return normalizar_barrio(barrio)
 
     return None
-# ================= SCRAPING =================
-
-def load_page(page_number: int):
-    url = BASE_URL if page_number == 1 else BASE_URL.replace(".html", f"-pagina-{page_number}.html")
-    print(f"\n→ Cargando página {page_number}: {url}")
-
-    for attempt in range(1, MAX_RETRIES + 1):
-        print(f"   Intento {attempt}/{MAX_RETRIES}")
-
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=False)
-            page = browser.new_page()
-            page.goto(url)
-
-            try:
-                page.wait_for_selector(CARD, timeout=8000)
-                cards = page.query_selector_all(CARD)
-
-                if len(cards) > 0:
-                    print(f"   ✔ Cards cargadas: {len(cards)}")
-                    data = scrape_cards(cards, page_number)
-                    browser.close()
-                    return data
-
-            except Exception as e:
-                print(f"   ⚠ Error: {e}")
-                browser.close()
-                time.sleep(2)
-
-    print("❌ No se pudo cargar la página.")
-    return []
 
 
-def scrape_cards(cards, page_number: int):
+def limpiar_direccion(direccion):
+    if not direccion:
+        return None
+
+    d = clean_text(direccion)
+
+    d = re.sub(r"^\s*\d+\s*coch\.?\s*", "", d, flags=re.I)
+    d = re.sub(r"^\s*coch\.?\s*", "", d, flags=re.I)
+    d = re.sub(r"^\s*cochera\s*", "", d, flags=re.I)
+    d = re.sub(r"^\s*garage\s*", "", d, flags=re.I)
+
+    cortes = [
+        "Departamento",
+        "Alquiler",
+        "Excelente",
+        "Hermoso",
+        "Muy",
+        "Oportunidad",
+        "Disponible",
+        "Contacto",
+        "WhatsApp",
+        "Super destacado",
+        "Destacado",
+        "Corredor Responsable",
+    ]
+
+    for corte in cortes:
+        idx = d.lower().find(corte.lower())
+        if idx > 8:
+            d = d[:idx].strip()
+            break
+
+    return d.strip() if d.strip() else None
+
+
+def extract_id_aviso(url):
+    if not url:
+        return None
+
+    m = re.search(r"-(\d+)\.html", url)
+    if m:
+        return m.group(1)
+
+    return url
+
+
+def parse_fecha_publicacion_zonaprop(texto):
+    if not texto:
+        return None, None
+
+    t = clean_text(texto).lower()
+    hoy = datetime.now().date()
+
+    m = re.search(r"publicado\s+hace\s+(\d+)\s+d[ií]a", t)
+    if m:
+        dias = safe_int(m.group(1))
+        fecha = hoy - timedelta(days=dias)
+        return fecha.strftime("%Y-%m-%d"), dias
+
+    m = re.search(r"publicado\s+hace\s+(\d+)\s+semana", t)
+    if m:
+        semanas = safe_int(m.group(1))
+        dias = semanas * 7
+        fecha = hoy - timedelta(days=dias)
+        return fecha.strftime("%Y-%m-%d"), dias
+
+    m = re.search(r"publicado\s+hace\s+(\d+)\s+mes", t)
+    if m:
+        meses = safe_int(m.group(1))
+        dias = meses * 30
+        fecha = hoy - timedelta(days=dias)
+        return fecha.strftime("%Y-%m-%d"), dias
+
+    if "publicado hoy" in t or "publicado hace instantes" in t:
+        return hoy.strftime("%Y-%m-%d"), 0
+
+    if "publicado ayer" in t:
+        fecha = hoy - timedelta(days=1)
+        return fecha.strftime("%Y-%m-%d"), 1
+
+    return None, None
+
+
+def extraer_fecha_publicacion_desde_detalle(context, url):
+    if not EXTRAER_FECHA_PUBLICACION or not url:
+        return None, None, None
+
+    detail_page = None
+
+    try:
+        detail_page = context.new_page()
+        detail_page.goto(url, wait_until="domcontentloaded", timeout=30000)
+        detail_page.wait_for_timeout(2500)
+
+        texto = clean_text(detail_page.inner_text("body"))
+
+        m = re.search(
+            r"Publicado\s+(?:hace\s+\d+\s+(?:d[ií]as?|semanas?|meses?)|hoy|ayer|hace instantes)",
+            texto,
+            re.I
+        )
+
+        publicado_raw = m.group(0) if m else None
+        fecha_publicacion, antiguedad_dias = parse_fecha_publicacion_zonaprop(publicado_raw or texto)
+
+        return publicado_raw, fecha_publicacion, antiguedad_dias
+
+    except Exception:
+        return None, None, None
+
+    finally:
+        if detail_page:
+            detail_page.close()
+
+
+def parsear_texto_propiedad(texto):
+    t = clean_text(texto)
+
+    moneda = "USD" if re.search(r"\b(USD|U\$S)\b", t, re.I) else "ARS"
+
+    precio_raw = None
+    precio_num = None
+
+    if moneda == "USD":
+        m = re.search(r"(USD|U\$S)\s*([\d\.]*)", t, re.I)
+        if m:
+            precio_num = safe_int(m.group(2))
+            if precio_num:
+                precio_raw = f"USD {m.group(2)}"
+    else:
+        m = re.search(r"\$\s*([\d\.]*)", t)
+        if m:
+            precio_num = safe_int(m.group(1))
+            if precio_num:
+                precio_raw = f"$ {m.group(1)}"
+
+    expensas = None
+    m_exp = re.search(r"\$\s*([\d\.]*)\s*Expensas", t, re.I)
+    if m_exp:
+        expensas = safe_int(m_exp.group(1))
+
+    m2 = None
+    m_m2 = re.search(r"(\d+)\s*m²", t, re.I)
+    if m_m2:
+        m2 = safe_int(m_m2.group(1))
+
+    ambientes = None
+    m_amb = re.search(r"(\d+)\s*amb", t, re.I)
+    if m_amb:
+        ambientes = safe_int(m_amb.group(1))
+
+    dormitorios = None
+    m_dorm = re.search(r"(\d+)\s*dorm", t, re.I)
+    if m_dorm:
+        dormitorios = safe_int(m_dorm.group(1))
+
+    banos = None
+    m_banos = re.search(r"(\d+)\s*bañ", t, re.I)
+    if m_banos:
+        banos = safe_int(m_banos.group(1))
+
+    cochera = bool(re.search(r"\bcoch\.?\b|\bcochera\b|\bgarage\b", t, re.I))
+
+    direccion = None
+
+    m_dir = re.search(
+        r"(?:\d+\s*bañ(?:o|os)?\.?|baño|baños|coch\.?|cochera|garage)\s+(.+)",
+        t,
+        re.I
+    )
+
+    if m_dir:
+        direccion = m_dir.group(1).strip()
+
+    if not direccion:
+        posibles = re.split(r"[·•‧∙⋅]", t)
+
+        for p in posibles:
+            p = p.strip()
+            low = p.lower()
+
+            if (
+                re.search(r"\d+", p)
+                and "$" not in p
+                and "expensas" not in low
+                and "m²" not in low
+                and "m2" not in low
+                and "amb" not in low
+                and "dorm" not in low
+                and "bañ" not in low
+            ):
+                direccion = p
+                break
+
+    direccion = limpiar_direccion(direccion)
+
+    return {
+        "precio_raw": precio_raw,
+        "precio_num": precio_num,
+        "moneda": moneda,
+        "expensas": expensas,
+        "m2": m2,
+        "ambientes": ambientes,
+        "dormitorios": dormitorios,
+        "banos": banos,
+        "cochera": cochera,
+        "direccion": direccion,
+    }
+
+
+def extract_real_url(card):
+    try:
+        for a in card.query_selector_all("a"):
+            href = a.get_attribute("href")
+            if href and "/propiedades/" in href:
+                return "https://www.zonaprop.com.ar" + href if href.startswith("/") else href
+    except Exception:
+        pass
+
+    return None
+
+
+def extract_image_url(card):
+    try:
+        imgs = card.query_selector_all("img")
+
+        for img in imgs:
+            src = (
+                img.get_attribute("src")
+                or img.get_attribute("data-src")
+                or img.get_attribute("data-flickity-lazyload")
+                or ""
+            )
+
+            alt = (img.get_attribute("alt") or "").lower()
+            src_lower = src.lower()
+
+            if not src:
+                continue
+
+            if "/empresas/" in src_lower:
+                continue
+
+            if "logo" in src_lower or "logo" in alt:
+                continue
+
+            if "/avisos/" in src_lower:
+                return src
+
+        return None
+
+    except Exception:
+        return None
+
+
+def build_page_url(page_number):
+    return BASE_URL if page_number == 1 else BASE_URL.replace(".html", f"-pagina-{page_number}.html")
+
+
+# ================= SCRAPER =================
+
+def scrape_cards(cards, page_number, context):
     rows = []
 
-    for c in cards:
-        full_raw = c.inner_text()
-        texto_limpio = clean_text(full_raw)
+    for card in cards:
+        texto = clean_text(card.inner_text())
+        datos = parsear_texto_propiedad(texto)
 
-direccion = extract_direccion(full_raw)
+        url_aviso = extract_real_url(card)
+        id_aviso = extract_id_aviso(url_aviso)
 
-expensas = extract_expensas(full_raw)
+        barrio_detectado = (
+            detectar_barrio(texto)
+            or detectar_barrio(datos.get("direccion"))
+        )
 
-mascotas = contains_any(
-    full_raw,
-    [
-        "acepta mascotas",
-        "mascotas",
-        "pet friendly"
-    ]
-)
-
-balcon = contains_any(
-    full_raw,
-    [
-        "balcón",
-        "balcon"
-    ]
-)
-
-cochera = contains_any(
-    full_raw,
-    [
-        "cochera",
-        "garage"
-    ]
-)
-
-apto_profesional = contains_any(
-    full_raw,
-    [
-        "apto profesional"
-    ]
-)
-
-terraza = contains_any(
-    full_raw,
-    [
-        "terraza"
-    ]
-)
-
-pileta = contains_any(
-    full_raw,
-    [
-        "pileta",
-        "piscina"
-    ]
-)
-
-        t = c.query_selector(TITLE)
-        l = c.query_selector(LOCATION)
-        p = c.query_selector(PRICE)
-        img_el = c.query_selector(IMG_SELECTOR)
-
-        barrio = l.inner_text().strip() if l else (t.inner_text().strip() if t else "")
-
-        precio_raw = p.inner_text().strip() if p else None
-        moneda = detect_currency(precio_raw) if precio_raw else None
-        precio_num = clean_price(precio_raw)
+        precio_num = datos["precio_num"]
+        moneda = datos["moneda"]
 
         precio_ars = None
         if precio_num:
@@ -222,61 +422,194 @@ pileta = contains_any(
         if precio_ars and precio_ars > MAX_PRECIO_ARS:
             continue
 
-        # m2 real
-        m2 = extract_m2(full_raw)
+        m2 = datos["m2"]
+        precio_m2 = int(round(precio_ars / m2)) if precio_ars and m2 else None
 
-        # ambientes real
-        ambientes = extract_ambientes(full_raw)
-
-        # precio por m2
-        precio_m2 = int(round(precio_ars / m2)) if (precio_ars and m2) else None
-
-        # URL de imagen
-        url_img = None
-        if img_el:
-            url_img = img_el.get_attribute("src") or img_el.get_attribute("data-flickity-lazyload")
+        publicado_raw, fecha_publicacion_zonaprop, antiguedad_zonaprop_dias = extraer_fecha_publicacion_desde_detalle(
+            context,
+            url_aviso
+        )
 
         rows.append({
-    "fecha": fecha_extraccion,
-    "pagina": page_number,
-
-    "barrio": barrio,
-    "direccion": direccion,
-
-    "precio_raw": precio_raw,
-    "moneda": moneda,
-
-    "m2": m2,
-    "ambientes": ambientes,
-
-    "precio_m2": precio_m2,
-
-    "mascotas": mascotas,
-    "balcon": balcon,
-    "cochera": cochera,
-    "apto_profesional": apto_profesional,
-    "terraza": terraza,
-    "pileta": pileta,
-
-    "expensas": expensas,
-
-    "url": url_img,
-
-    "texto": texto_limpio
-})
+            "fecha": fecha_extraccion,
+            "pagina": page_number,
+            "id_aviso": id_aviso,
+            "barrio": barrio_detectado,
+            "direccion": datos["direccion"],
+            "precio_raw": datos["precio_raw"],
+            "moneda": moneda,
+            "expensas": datos["expensas"],
+            "m2": m2,
+            "ambientes": datos["ambientes"],
+            "dormitorios": datos["dormitorios"],
+            "banos": datos["banos"],
+            "precio_m2": precio_m2,
+            "publicado_zonaprop_raw": publicado_raw,
+            "fecha_publicacion_zonaprop": fecha_publicacion_zonaprop,
+            "antiguedad_zonaprop_dias": antiguedad_zonaprop_dias,
+            "mascotas": acepta_mascotas(texto),
+            "balcon": contains_any(texto, ["balcón", "balcon"]),
+            "cochera": datos["cochera"],
+            "terraza": contains_any(texto, ["terraza"]),
+            "pileta": contains_any(texto, ["pileta", "piscina"]),
+            "parrilla": contains_any(texto, ["parrilla"]),
+            "luminoso": contains_any(texto, ["luminoso", "luminosa"]),
+            "url": url_aviso,
+            "imagen": extract_image_url(card),
+            "texto": texto,
+        })
 
     return rows
 
 
-# ================= MAIN =================
+def load_page(page_number):
+    url = build_page_url(page_number)
+    print(f"\n→ Cargando página {page_number}: {url}")
+
+    for attempt in range(1, MAX_RETRIES + 1):
+        print(f"   Intento {attempt}/{MAX_RETRIES}")
+
+        with sync_playwright() as p:
+            browser = p.chromium.launch(
+                headless=HEADLESS,
+                args=["--disable-dev-shm-usage"]
+            )
+
+            context = browser.new_context(
+                user_agent=(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/120.0.0.0 Safari/537.36"
+                )
+            )
+
+            page = context.new_page()
+
+            try:
+                page.goto(url, wait_until="domcontentloaded", timeout=45000)
+                page.wait_for_timeout(6000)
+
+                for _ in range(5):
+                    page.mouse.wheel(0, 1200)
+                    page.wait_for_timeout(1200)
+
+                cards = page.query_selector_all(CARD)
+
+                if not cards:
+                    cards = page.query_selector_all("div[class*='posting']")
+
+                if cards:
+                    print(f"   ✔ Cards encontradas: {len(cards)}")
+                    data = scrape_cards(cards, page_number, context)
+                    browser.close()
+                    return data
+
+                print("   ⚠ No se encontraron cards")
+
+            except Exception as e:
+                print(f"   ⚠ Error: {e}")
+
+            finally:
+                browser.close()
+                time.sleep(3)
+
+    print(f"   ❌ Página {page_number} omitida")
+    return []
+
+
+def aplicar_tracking(df):
+    hoy = pd.to_datetime(fecha_extraccion)
+
+    if "id_aviso" not in df.columns:
+        df["id_aviso"] = df["url"].apply(extract_id_aviso)
+
+    df["id_aviso"] = df["id_aviso"].astype(str)
+
+    if os.path.exists(TRACKING_FILE):
+        tracking = pd.read_csv(TRACKING_FILE, sep=";")
+    else:
+        tracking = pd.DataFrame(columns=["id_aviso", "fecha_primera_vista"])
+
+    tracking["id_aviso"] = tracking["id_aviso"].astype(str)
+
+    df = df.merge(
+        tracking,
+        on="id_aviso",
+        how="left"
+    )
+
+    df["fecha_primera_vista"] = df["fecha_primera_vista"].fillna(fecha_extraccion)
+
+    df["dias_desde_primera_vista"] = (
+        hoy - pd.to_datetime(df["fecha_primera_vista"], errors="coerce")
+    ).dt.days
+
+    df["nueva_publicacion"] = df["dias_desde_primera_vista"] <= 5
+
+    nuevo_tracking = df[["id_aviso", "fecha_primera_vista"]].drop_duplicates()
+
+    tracking_final = (
+        pd.concat([tracking, nuevo_tracking])
+        .drop_duplicates(subset=["id_aviso"], keep="first")
+    )
+
+    tracking_final.to_csv(
+        TRACKING_FILE,
+        sep=";",
+        index=False,
+        encoding="utf-8-sig"
+    )
+
+    return df
+
 
 def main():
     all_rows = []
 
-    for n in PAGES:
-        all_rows.extend(load_page(n))
+    for page_number in PAGES:
+        all_rows.extend(load_page(page_number))
 
     df = pd.DataFrame(all_rows)
+
+    if df.empty:
+        print("\n❌ No se encontraron propiedades. No se sobrescribe el CSV anterior.")
+        return
+
+    df = aplicar_tracking(df)
+
+    columnas = [
+        "fecha",
+        "pagina",
+        "id_aviso",
+        "fecha_primera_vista",
+        "dias_desde_primera_vista",
+        "nueva_publicacion",
+        "publicado_zonaprop_raw",
+        "fecha_publicacion_zonaprop",
+        "antiguedad_zonaprop_dias",
+        "barrio",
+        "direccion",
+        "precio_raw",
+        "moneda",
+        "expensas",
+        "m2",
+        "ambientes",
+        "dormitorios",
+        "banos",
+        "precio_m2",
+        "mascotas",
+        "balcon",
+        "cochera",
+        "terraza",
+        "pileta",
+        "parrilla",
+        "luminoso",
+        "url",
+        "imagen",
+        "texto",
+    ]
+
+    df = df.reindex(columns=columnas)
 
     df.to_csv(
         OUTPUT_FILE,
@@ -286,6 +619,13 @@ def main():
     )
 
     print(f"\n✔ Archivo generado correctamente: {OUTPUT_FILE}")
+    print(f"✔ Total propiedades: {len(df)}")
+
+    print("\nBarrios detectados:")
+    print(df["barrio"].value_counts(dropna=False))
+
+    print("\nNuevas publicaciones:")
+    print(df["nueva_publicacion"].value_counts(dropna=False))
 
 
 if __name__ == "__main__":
